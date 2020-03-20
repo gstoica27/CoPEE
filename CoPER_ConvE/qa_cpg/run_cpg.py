@@ -42,8 +42,8 @@ save_best_embeddings = True
 model_load_path = None
 
 # Load data.
-# data_loader = data.KinshipLoader()
-data_loader = data.FB15k237Loader(is_test=True, needs_test_set_cleaning=True)
+data_loader = data.FB15k237Loader()
+# data_loader = data.FB15k237Loader(is_test=True, needs_test_set_cleaning=True)
 
 # Load configuration parameters.
 if use_cpg:
