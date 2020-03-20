@@ -37,7 +37,7 @@ def _evaluate(data_iterator, data_iterator_handle, name, summary_writer, step):
 
 # Parameters.
 use_cpg = False
-use_parameter_lookup = True
+use_parameter_lookup = False
 save_best_embeddings = True
 model_load_path = None
 

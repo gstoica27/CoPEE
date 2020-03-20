@@ -109,7 +109,7 @@ class _DataLoader(Loader):
                 'e1': sample['e1'],
                 'e2': sample['e2'],
                 'rel': sample['rel'],
-                'e2_multi': sample['e2_multi'],
+                'rel_multi': sample['rel_multi'],
                 'is_inverse': tf.cast(sample['is_inverse'], tf.bool)}
 
         def filter_inv_relations(sample):
@@ -120,7 +120,7 @@ class _DataLoader(Loader):
                 'e1': sample['e1'],
                 'e2': sample['e2'],
                 'rel': sample['rel'],
-                'e2_multi': sample['e2_multi']}
+                'rel_multi': sample['rel_multi']}
 
         conve_data = tf.data.Dataset.from_tensor_slices(conve_files) \
             .interleave(tf.data.TFRecordDataset,
@@ -146,8 +146,8 @@ class _DataLoader(Loader):
                     num_parallel_calls=num_parallel_batches)
                 conve_data = conve_data.apply(tf.contrib.data.unbatch())
             else:
-                assert num_labels <= self.num_ent, \
-                    'Parameter `num_labels` needs to be at most the total number of entities.'
+                assert num_labels <= self.num_rel, \
+                    'Parameter `num_labels` needs to be at most the total number of relations.'
                 conve_data = conve_data.map(
                     lambda sample: self._sample_negatives(
                         sample=sample,
@@ -158,7 +158,7 @@ class _DataLoader(Loader):
             conve_data = conve_data.map(self._add_lookup_values)
 
         conve_data = conve_data.shuffle(buffer_size=1000)
-
+        # conve_data = conve_data.apply(tf.contrib.data.unbatch())
         conve_data = conve_data \
             .batch(batch_size) \
             .prefetch(prefetch_buffer_size)
@@ -179,17 +179,17 @@ class _DataLoader(Loader):
         def map_fn(sample):
             sample = parser(sample)
             
-            e2_multi = tf.sparse_to_dense(
-                sparse_indices=sample['e2_multi'][:, None],
-                sparse_values=tf.ones([tf.shape(sample['e2_multi'])[0]]),
-                output_shape=[self.num_ent], 
+            rel_multi = tf.sparse_to_dense(
+                sparse_indices=sample['rel_multi'][:, None],
+                sparse_values=tf.ones([tf.shape(sample['rel_multi'])[0]]),
+                output_shape=[self.num_rel],
                 validate_indices=False)
 
             return {
                 'e1': sample['e1'],
                 'e2': sample['e2'],
                 'rel': sample['rel'],
-                'e2_multi': e2_multi,
+                'rel_multi': rel_multi,
                 'is_inverse': tf.cast(sample['is_inverse'], tf.bool)}
 
         def filter_inv_relations(sample):
@@ -200,7 +200,7 @@ class _DataLoader(Loader):
                 'e1': sample['e1'],
                 'e2': sample['e2'],
                 'rel': sample['rel'],
-                'e2_multi': sample['e2_multi']}
+                'rel_multi': sample['rel_multi']}
 
         def add_fake_lookup_vals(sample):
             # Add an empty `lookup_values` tensor to match the inputs in the training dataset and use a single iterator.
@@ -209,7 +209,7 @@ class _DataLoader(Loader):
                 'e1': sample['e1'],
                 'e2': sample['e2'],
                 'rel': sample['rel'],
-                'e2_multi': sample['e2_multi'],
+                'rel_multi': sample['rel_multi'],
                 'lookup_values': lookup_values}
 
         data = tf.data.Dataset.from_tensor_slices(filenames)\
@@ -226,20 +226,20 @@ class _DataLoader(Loader):
             .prefetch(prefetch_buffer_size)
 
     def _sample_negatives(self, sample, prop_negatives, num_labels):
-        correct_e2s = sample['e2_multi']
-        e2s_dense = tf.sparse_to_dense(
-            sparse_indices=correct_e2s[:, None],
-            sparse_values=tf.ones([tf.shape(correct_e2s)[0]]),
-            output_shape=[self.num_ent], 
+        correct_rels = sample['rel_multi']
+        rels_dense = tf.sparse_to_dense(
+            sparse_indices=correct_rels[:, None],
+            sparse_values=tf.ones([tf.shape(correct_rels)[0]]),
+            output_shape=[self.num_rel],
             validate_indices=False)
 
-        correct_e2s = tf.random_shuffle(correct_e2s)
+        correct_rels = tf.random_shuffle(correct_rels)
         # To make the code fast, we pick as negatives at random some entities, without removing the positives from the
         # list. If some of these e2s happen to be positive, they will be supervised with their correct label.
-        wrong_e2s = tf.random_shuffle(tf.range(self.num_ent, dtype=tf.int64))
+        wrong_rels = tf.random_shuffle(tf.range(self.num_rel, dtype=tf.int64))
 
-        num_positives = tf.size(correct_e2s)
-        num_negatives = tf.size(wrong_e2s)
+        num_positives = tf.size(correct_rels)
+        num_negatives = tf.size(wrong_rels)
 
         num_positives_needed = int(1.0 / (1.0 + prop_negatives) * num_labels)
         print('num_positives_needed: ', num_positives_needed)
@@ -247,9 +247,9 @@ class _DataLoader(Loader):
         def _less_positives():
             # We have less positives than requested, therefore fill with negatives up to `num_labels` elements.
             num_neg = num_labels - num_positives
-            neg_indexes = wrong_e2s[:num_neg]
+            neg_indexes = wrong_rels[:num_neg]
             return tf.concat([
-                correct_e2s[:num_positives],
+                correct_rels[:num_positives],
                 neg_indexes], axis=0)
 
         def _more_positives():
@@ -258,9 +258,9 @@ class _DataLoader(Loader):
             num_neg = tf.minimum(num_negatives, num_negatives_needed)
             # If we don't have enough negatives, fill the rest of the elements up to `num_labels` with positives.
             num_pos = num_labels - num_neg
-            neg_indexes = wrong_e2s[:num_neg]
+            neg_indexes = wrong_rels[:num_neg]
             return tf.concat([
-                correct_e2s[:num_pos],
+                correct_rels[:num_pos],
                 neg_indexes], axis=0)
 
         indexes = tf.cond(
@@ -273,14 +273,14 @@ class _DataLoader(Loader):
                 'e1': sample['e1'],
                 'e2': sample['e2'],
                 'rel': sample['rel'],
-                'e2_multi': tf.gather(e2s_dense, indexes),
+                'rel_multi': tf.gather(rels_dense, indexes),
                 'lookup_values': lookup_values}
 
     def _create_negative_sampling_dataset(self, sample, num_negative_labels):
-        e2_multi_dense = tf.sparse_to_dense(
-            sparse_indices=sample['e2_multi'][:, None],
-            sparse_values=tf.ones([tf.shape(sample['e2_multi'])[0]]),
-            output_shape=[self.num_ent],
+        rel_multi_dense = tf.sparse_to_dense(
+            sparse_indices=sample['rel_multi'][:, None],
+            sparse_values=tf.ones([tf.shape(sample['rel_multi'])[0]]),
+            output_shape=[self.num_rel],
             validate_indices=False)
 
         # To make the code fast, we pick as negatives at 
@@ -288,37 +288,40 @@ class _DataLoader(Loader):
         # positives from the list. If some of these e2s 
         # happen to be positive, they will be supervised 
         # with their correct label.
-        shuffled_e2s = tf.random_shuffle(
-            tf.range(self.num_ent, dtype=tf.int64))
+        shuffled_rels = tf.random_shuffle(
+            tf.range(self.num_rel, dtype=tf.int64))
 
-        correct_e2s_shape = tf.shape(sample['e2_multi'])
+        correct_rels_shape = tf.shape(sample['rel_multi'])
         neg_start = tf.random_uniform(
-            shape=correct_e2s_shape,
-            maxval=self.num_ent-num_negative_labels,
+            shape=correct_rels_shape,
+            maxval=self.num_rel-num_negative_labels,
             dtype=tf.int32)
         neg_indexes = tf.gather(
-            shuffled_e2s,
+            shuffled_rels,
             neg_start[:, None] + tf.range(num_negative_labels))
-        indexes = tf.concat([sample['e2_multi'][:, None], neg_indexes], axis=1)
-        values = tf.gather(e2_multi_dense, indexes)
+        indexes = tf.concat([sample['rel_multi'][:, None], neg_indexes], axis=1)
 
-        num_correct_e2s = correct_e2s_shape[0]
+        print(indexes)
+        logger.info(indexes)
+        values = tf.gather(rel_multi_dense, indexes)
+
+        num_correct_rels = correct_rels_shape[0]
 
         return {
-                'e1': tf.tile(sample['e1'][None], [num_correct_e2s]),
-                'e2': tf.tile(sample['e2'][None], [num_correct_e2s]),
-                'rel': tf.tile(sample['rel'][None], [num_correct_e2s]),
-                'e2_multi': values,
+                'e1': tf.tile(sample['e1'][None], [num_correct_rels]),
+                'e2': tf.tile(sample['e2'][None], [num_correct_rels]),
+                'rel': tf.tile(sample['rel'][None], [num_correct_rels]),
+                'rel_multi': values,
                 'lookup_values': tf.cast(indexes, tf.int32)}
 
     def _add_lookup_values(self, sample):
         e1 = sample['e1']
         e2 = sample['e2']
         rel = sample['rel']
-        e2_multi = tf.sparse_to_dense(
-            sparse_indices=sample['e2_multi'][:, None],
-            sparse_values=tf.ones([tf.shape(sample['e2_multi'])[0]]),
-            output_shape=[self.num_ent], 
+        rel_multi = tf.sparse_to_dense(
+            sparse_indices=sample['rel_multi'][:, None],
+            sparse_values=tf.ones([tf.shape(sample['rel_multi'])[0]]),
+            output_shape=[self.num_rel],
             validate_indices=False)
         lookup_values = tf.zeros(shape=(0,), dtype=tf.int32)
 
@@ -326,7 +329,7 @@ class _DataLoader(Loader):
                 'e1': e1,
                 'e2': e2,
                 'rel': rel,
-                'e2_multi': e2_multi,
+                'rel_multi': rel_multi,
                 'lookup_values': lookup_values}
 
     def generate_json_files_and_ids(self, directory, buffer_size=1024 * 1024):
@@ -392,7 +395,7 @@ class _DataLoader(Loader):
                 'e1': tf.FixedLenFeature([], tf.int64),
                 'e2': tf.FixedLenFeature([], tf.int64),
                 'rel': tf.FixedLenFeature([], tf.int64),
-                'e2_multi': tf.FixedLenSequenceFeature([], tf.int64, allow_missing=True),
+                'rel_multi': tf.FixedLenSequenceFeature([], tf.int64, allow_missing=True),
                 'is_inverse': tf.FixedLenFeature([], tf.int64)}
             return tf.parse_single_example(r, features=features)
 
@@ -422,27 +425,27 @@ class _DataLoader(Loader):
                     rel_reverse = rel + '_reverse'
 
                     # Add potentially missing keys to dictionaries.
-                    if (e1, rel) not in full_graph:
-                        full_graph[(e1, rel)] = set()
-                    if (e2, rel_reverse) not in full_graph:
-                        full_graph[(e2, rel_reverse)] = set()
-                    if (e1, rel) not in graphs[f]:
-                        graphs[f][(e1, rel)] = set()
+                    if (e1, e2) not in full_graph:
+                        full_graph[(e1, e2)] = set()
+                    if (e2, e1) not in full_graph:
+                        full_graph[(e2, e1)] = set()
+                    if (e1, e2) not in graphs[f]:
+                        graphs[f][(e1, e2)] = set()
                     if (e2, rel_reverse) not in graphs[f]:
-                        graphs[f][(e2, rel_reverse)] = set()
+                        graphs[f][(e2, e1)] = set()
 
                     # Add observations.
-                    full_graph[(e1, rel)].add(e2)
-                    full_graph[(e2, rel_reverse)].add(e1)
-                    graphs[f][(e1, rel)].add(e2)
+                    full_graph[(e1, e2)].add(rel)
+                    full_graph[(e2, e1)].add(rel_reverse)
+                    graphs[f][(e1, e2)].add(rel)
                     if self.add_reverse_per_filetype[i]:
-                        graphs[f][(e2, rel_reverse)].add(e1)
+                        graphs[f][(e2, e1)].add(rel_reverse)
 
         # Write preprocessed files in a standardized JSON format.
-        e1rel_to_e2_train = os.path.join(directory, 'e1rel_to_e2_train.json')
-        e1rel_to_e2_dev = os.path.join(directory, 'e1rel_to_e2_dev.json')
-        e1rel_to_e2_test = os.path.join(directory, 'e1rel_to_e2_test.json')
-        e1rel_to_e2_full = os.path.join(directory, 'e1rel_to_e2_full.json')
+        e1e2_to_rel_train = os.path.join(directory, 'e1e2_to_rel_train.json')
+        e1e2_to_rel_dev = os.path.join(directory, 'e1e2_to_rel_dev.json')
+        e1e2_to_rel_test = os.path.join(directory, 'e1e2_to_rel_test.json')
+        e1e2_to_rel_full = os.path.join(directory, 'e1e2_to_rel_full.json')
 
         # Potentially remove from the test set the entities that do not appear in train.
         if self.needs_test_set_cleaning:
@@ -451,55 +454,55 @@ class _DataLoader(Loader):
             allowed_entities = set()
             allowed_relations = set()
             for key, value in six.iteritems(graphs['train.txt']):
-                e1, rel = key
-                e2_multi = list(value)
-                allowed_entities.add(e1)
-                allowed_entities.update(e2_multi)
+                e1, e2 = key
+                rel_multi = list(value)
                 allowed_relations.add(rel)
+                allowed_relations.update(rel_multi)
+                allowed_entities.update({e1, e2})
         else:
             allowed_entities = None
             allowed_relations = None
 
-        self._write_graph(e1rel_to_e2_train, graphs[files[0]])
-        self._write_graph(e1rel_to_e2_dev, graphs[files[1]], full_graph,
+        self._write_graph(e1e2_to_rel_train, graphs[files[0]])
+        self._write_graph(e1e2_to_rel_dev, graphs[files[1]], full_graph,
                           allowed_entities=allowed_entities, allowed_relations=allowed_relations)
-        self._write_graph(e1rel_to_e2_test, graphs[files[2]], full_graph,
+        self._write_graph(e1e2_to_rel_test, graphs[files[2]], full_graph,
                           allowed_entities=allowed_entities, allowed_relations=allowed_relations)
-        self._write_graph(e1rel_to_e2_full, full_graph, full_graph,
+        self._write_graph(e1e2_to_rel_full, full_graph, full_graph,
                           allowed_entities=allowed_entities, allowed_relations=allowed_relations)
 
         return {
-            'train': e1rel_to_e2_train,
-            'dev': e1rel_to_e2_dev,
-            'test': e1rel_to_e2_test,
-            'full': e1rel_to_e2_full}
+            'train': e1e2_to_rel_train,
+            'dev': e1e2_to_rel_dev,
+            'test': e1e2_to_rel_test,
+            'full': e1e2_to_rel_full}
 
     @staticmethod
     def _write_graph(filename, graph, labels=None, allowed_entities=None, allowed_relations=None):
         with open(filename, 'w') as handle:
             for key, value in six.iteritems(graph):
-                e1, rel = key
+                e1, e2 = key
                 if labels is None:
                     sample = {
                         'e1': e1,
-                        'e2': 'None',
-                        'rel': rel,
-                        'e2_multi': ' '.join(list(value))}
+                        'e2': e2,
+                        'rel': 'None',
+                        'rel_multi': ' '.join(list(value))}
                     handle.write(json.dumps(sample) + '\n')
                 else:
                     if allowed_entities is not None and e1 not in allowed_entities:
                         continue
-                    if allowed_relations is not None and rel not in allowed_relations:
+                    if allowed_entities is not None and e2 not in allowed_entities:
                         continue
-                    e2_multi = ' '.join(list(labels[key]))
-                    for e2 in value:
-                        if allowed_entities is not None and e2 not in allowed_entities:
+                    rel_multi = ' '.join(list(labels[key]))
+                    for rel in value:
+                        if allowed_relations is not None and rel not in allowed_relations:
                             continue
                         sample = {
                             'e1': e1,
                             'e2': e2,
                             'rel': rel,
-                            'e2_multi': e2_multi}
+                            'rel_multi': rel_multi}
                         handle.write(json.dumps(sample) + '\n')
             handle.flush()
 
@@ -544,19 +547,19 @@ class _DataLoader(Loader):
                     entities = set()
                     entities.add(sample['e1'])
                     entities.add(sample['e2'])
-                    entities.update(sample['e2_multi'].split(' '))
                     for entity in entities:
                         if entity != 'None' and entity not in entity_ids:
                             entity_names[num_ent] = entity
                             entity_ids[entity] = num_ent
                             num_ent += 1
                 if not relations_exist:
-                    relation = sample['rel']
-                    if relation != 'None' and \
-                            relation not in relation_ids:
-                        relation_names[num_rel] = relation
-                        relation_ids[relation] = num_rel
-                        num_rel += 1
+                    relations = {sample['rel']}
+                    relations.update(sample['rel_multi'].split(' '))
+                    for relation in relations:
+                        if relations != 'None' and relation not in relation_ids:
+                            relation_names[num_rel] = relation
+                            relation_ids[relation] = num_rel
+                            num_rel += 1
 
         # Store the index maps in text files, if needed.
         # TODO: Can be done more efficiently using ordered dictionaries.
@@ -576,9 +579,9 @@ class _DataLoader(Loader):
         e1 = entity_ids[sample['e1']]
         e2 = entity_ids[sample['e2']]
         rel = relation_ids[sample['rel']]
-        e2_multi = [entity_ids[e]
-                     for e in sample['e2_multi'].split(' ')
-                     if e != 'None']
+        rel_multi = [relation_ids[rel]
+                     for rel in sample['rel_multi'].split(' ')
+                     if rel != 'None']
 
         def _int64(values):
             return tf.train.Feature(
@@ -588,7 +591,7 @@ class _DataLoader(Loader):
             'e1': _int64([e1]),
             'e2': _int64([e2]),
             'rel': _int64([rel]),
-            'e2_multi': _int64(e2_multi),
+            'rel_multi': _int64(rel_multi),
             'is_inverse': _int64([sample['rel'].endswith('_reverse')])})
 
         return tf.train.Example(features=features)
@@ -696,3 +699,89 @@ class NELL995Loader(_MinervaDataLoader):
             dataset_name += '-test'
         # NELL contains some test entities that do not appear during training. We remove those.
         super(NELL995Loader, self).__init__(dataset_name, needs_test_set_cleaning=needs_test_set_cleaning)
+
+if __name__ == '__main__':
+    if __name__ == '__main__':
+        data_loader = KinshipLoader()
+        working_dir = os.path.join(os.getcwd(), 'temp', data_loader.dataset_name)
+        data_dir = os.path.join(working_dir, 'data')
+        data_loader.maybe_create_tf_record_files(data_dir)
+
+        logger.info('Creating train dataset...')
+        train_dataset = data_loader.train_dataset(
+            directory=data_dir,
+            batch_size=5,
+            include_inv_relations=True,
+            buffer_size=1024,
+            prefetch_buffer_size=16,
+            prop_negatives=10.0,
+            num_labels=50,
+            cache=True,
+            one_positive_label_per_sample=False)
+        train_eval_dataset = data_loader.eval_dataset(
+            directory=data_dir,
+            dataset_type='train',
+            batch_size=5,
+            include_inv_relations=False,
+            buffer_size=1024,
+            prefetch_buffer_size=16)
+
+        train_iterator = train_dataset.make_one_shot_iterator()
+        train_eval_iterator = train_eval_dataset.make_initializable_iterator()
+
+        with tf.device('/CPU:0'):
+            input_iterator_handle = tf.placeholder(
+                tf.string, shape=[], name='input_iterator_handle')
+            input_iterator = tf.data.Iterator.from_string_handle(
+                input_iterator_handle,
+                output_types={
+                    'e1': tf.int64,
+                    'e2': tf.int64,
+                    'rel': tf.int64,
+                    'rel_multi': tf.float32,
+                    'lookup_values': tf.int32
+                },
+                output_shapes={
+                    'e1': [None],
+                    'e2': [None],
+                    'rel': [None],
+                    'rel_multi': [None, None],
+                    'lookup_values': [None, None]
+                })
+
+        # Get the next samples from the training and the evaluation iterators.
+        next_input_sample = input_iterator.get_next()
+
+        e1 = next_input_sample['e1']
+        rel = next_input_sample['rel']
+        rel_multi = next_input_sample['rel_multi']
+        e2 = next_input_sample['e2']
+
+        rel_obj_lookup_values = next_input_sample['lookup_values']
+
+        config = tf.ConfigProto(allow_soft_placement=True)
+        config.gpu_options.allow_growth = True
+        session = tf.Session(config=config)
+
+        session.run(tf.global_variables_initializer())
+        train_iterator_handle = session.run(train_iterator.string_handle())
+        train_eval_iterator_handle = session.run(train_eval_iterator.string_handle())
+
+        session.run(train_eval_iterator.initializer)
+        feed_dict = {input_iterator_handle: train_iterator_handle}
+        for i in range(10):
+            e1s, rels, rel_multis, e2s, rel_indices = session.run([e1,
+                                                                 rel,
+                                                                 rel_multi,
+                                                                 e2,
+                                                                 rel_obj_lookup_values],
+                                                                feed_dict=feed_dict)
+
+            print('e1s: {}'.format(e1s.shape))
+            print('rels: {}'.format(rels.shape))
+            print('rels: {}'.format(rel_multis.shape))
+            print('e1_indices: {}'.format(e2s.shape))
+            print('rel_indices: {}'.format(rel_indices.shape))
+            print("#" * 100)
+            print('rels: {}'.format(rels))
+            print('#' * 100)
