@@ -9,18 +9,25 @@ import yaml
 
 from qa_cpg import data
 from qa_cpg.models import ConvE
-from qa_cpg.metrics import ranking_and_hits
+from qa_cpg.metrics import ranking_and_hits, relation_extraction_metric_preprocessing, score
 from qa_cpg.utils.dict_with_attributes import AttributeDict
 
 logger = logging.getLogger(__name__)
 
 
-def _evaluate(data_iterator, data_iterator_handle, name, summary_writer, step):
+def _evaluate(data_iterator, data_iterator_handle, name, summary_writer, step, id2rel):
     logger.info('Running %s at step %d...', name, step)
     session.run(data_iterator.initializer)
     mr, mrr, hits = ranking_and_hits(model, eval_path, data_iterator_handle, name, session)
-
-    metrics = {'mr': mr, 'mrr': mrr}
+    session.run(data_iterator.initializer)
+    correct_rels, predicted_rels = relation_extraction_metric_preprocessing(model,
+                                                                            id2rel,
+                                                                            data_iterator_handle,
+                                                                            name,
+                                                                            session)
+    re_metrics = score(correct_rels, predicted_rels)
+    metrics = {'mr': mr, 'mrr': mrr, 'precision': re_metrics['precision'],
+               'recall': re_metrics['recall'], 'f1': re_metrics['f1']}
 
     if cfg.eval.summary_steps is not None:
         summary = tf.Summary()
@@ -29,6 +36,9 @@ def _evaluate(data_iterator, data_iterator_handle, name, summary_writer, step):
             metrics['hits@'+str(hits_level)] = hits_value
         summary.value.add(tag=name+'/mrr', simple_value=mrr)
         summary.value.add(tag=name+'/mr', simple_value=mr)
+        summary.value.add(tag=name+'/precision', simple_value=re_metrics['precision'])
+        summary.value.add(tag=name + '/recall', simple_value=re_metrics['recall'])
+        summary.value.add(tag=name + '/f1', simple_value=re_metrics['f1'])
         summary_writer.add_summary(summary, step)
         summary_writer.flush()
 
@@ -42,7 +52,7 @@ save_best_embeddings = True
 model_load_path = None
 
 # Load data.
-data_loader = data.FB15k237Loader()
+data_loader = data.TACREDLoader()
 # data_loader = data.FB15k237Loader(is_test=True, needs_test_set_cleaning=True)
 
 # Load configuration parameters.
@@ -204,7 +214,7 @@ if __name__ == '__main__':
     best_iter = None
     if model_load_path is not None:
         saver.restore(session, model_load_path)
-        _evaluate(test_eval_iterator, test_eval_iterator_handle, 'test', summary_writer, 0)
+        _evaluate(test_eval_iterator, test_eval_iterator_handle, 'test', summary_writer, 0, id2rel=data_loader.id2rel)
         exit()
     for step in range(cfg.training.max_steps):
         feed_dict = {
@@ -227,13 +237,16 @@ if __name__ == '__main__':
             # Perform evaluation.
             logger.info('Evaluating model with name %s ...', model_name)
             if cfg.eval.eval_on_train:
-                _evaluate(train_eval_iterator, train_eval_iterator_handle, 'train_evaluation', summary_writer, step)
+                _evaluate(train_eval_iterator, train_eval_iterator_handle, 'train_evaluation',
+                          summary_writer, step, id2rel=data_loader.id2rel)
             if cfg.eval.eval_on_dev:
                 metrics_dev = _evaluate(
-                    dev_eval_iterator, dev_eval_iterator_handle, 'dev_evaluation', summary_writer, step)
+                    dev_eval_iterator, dev_eval_iterator_handle, 'dev_evaluation',
+                    summary_writer, step, id2rel=data_loader.id2rel)
             if cfg.eval.eval_on_test:
                 metrics_test = _evaluate(
-                    test_eval_iterator, test_eval_iterator_handle, 'test_evaluation', summary_writer, step)
+                    test_eval_iterator, test_eval_iterator_handle, 'test_evaluation',
+                    summary_writer, step, id2rel=data_loader.id2rel)
             if cfg.eval.eval_on_dev and cfg.eval.eval_on_test:
                 if (best_metrics_dev[validation_metric] < metrics_dev[validation_metric]):
                     best_metrics_dev = metrics_dev

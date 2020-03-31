@@ -41,16 +41,17 @@ class Loader(six.with_metaclass(abc.ABCMeta, object)):
             buffer_size (int, optional): Buffer size to use while downloading.
         """
         self.maybe_download(directory, buffer_size)
-        extracted = False
-        for filename in self.filenames:
-            if filename.endswith('.tar.gz'):
-                path = os.path.join(directory, filename)
-                extracted_path = path[:-7]
-                if not os.path.exists(extracted_path):
-                    logger.info('Extracting file: %s', path)
-                    with tarfile.open(path, 'r:*') as handle:
-                        handle.extractall(path=extracted_path)
-                extracted = True
+        # extracted = False
+        # for filename in self.filenames:
+        #     if filename.endswith('.tar.gz'):
+        #         path = os.path.join(directory, filename)
+        #         extracted_path = path[:-7]
+        #         if not os.path.exists(extracted_path):
+        #             logger.info('Extracting file: %s', path)
+        #             with tarfile.open(path, 'r:*') as handle:
+        #                 handle.extractall(path=extracted_path)
+        #         extracted = True
+        extracted = True
         return extracted
 
     def maybe_download(self, directory, buffer_size=1024 * 1024):
@@ -85,6 +86,10 @@ class _DataLoader(Loader):
         # TODO: This is a bad way of "leaking" this information because it may be incomplete when querried.
         self.num_ent = None
         self.num_rel = None
+        self.id2ent = None
+        self.id2rel = None
+        self.ent2id = None
+        self.rel2id = None
 
     def train_dataset(self,
                       directory,
@@ -334,11 +339,16 @@ class _DataLoader(Loader):
 
     def generate_json_files_and_ids(self, directory, buffer_size=1024 * 1024):
         json_files = self.load_and_preprocess(directory, buffer_size)
-        entity_ids, relation_ids = self._assign_ids(json_files)
+        entity_ids, relation_ids, entity_names, relation_names = self._assign_ids(json_files)
         entity_ids['None'] = -1
         relation_ids['None'] = -1
         self.num_ent = len(entity_ids) - 1
         self.num_rel = len(relation_ids) - 1
+        self.id2ent = entity_names
+        self.id2rel = relation_names
+        self.ent2id = entity_ids
+        self.rel2id = relation_ids
+
         return json_files, entity_ids, relation_ids
 
     def maybe_create_tf_record_files(self,
@@ -418,7 +428,7 @@ class _DataLoader(Loader):
             graphs[f] = {}
             with open(os.path.join(directory, f), 'r') as handle:
                 for line in handle:
-                    e1, rel, e2 = line.split('\t')
+                    e1, e2, rel = line.split('\t')
                     e1 = e1.strip()
                     e2 = e2.strip()
                     rel = rel.strip()
@@ -572,7 +582,7 @@ class _DataLoader(Loader):
                 for relation_id in range(num_rel):
                     handle.write(relation_names[relation_id] + '\n')
 
-        return entity_ids, relation_ids
+        return entity_ids, relation_ids, entity_names, relation_names
 
     @staticmethod
     def _encode_sample_as_tf_record(sample, entity_ids, relation_ids):
@@ -610,7 +620,7 @@ class _ConvEDataLoader(_DataLoader):
 class _MinervaDataLoader(_DataLoader):
     def __init__(self, dataset_name, needs_test_set_cleaning=False):
         url = 'https://raw.githubusercontent.com/shehzaadzd/MINERVA/master/datasets/data_preprocessed/%s' % dataset_name
-        filenames = ['train.txt', 'dev.txt', 'test.txt']
+        filenames = ['train.txt', 'valid.txt', 'test.txt']
         filetypes = ['train', 'dev', 'test']
         add_reverse_per_filetype = [True, False, False]
         super(_MinervaDataLoader, self).__init__(url, filenames, dataset_name, filetypes, needs_test_set_cleaning,
@@ -621,6 +631,12 @@ class NationsLoader(_ConvEDataLoader):
     def __init__(self):
         dataset_name = 'nations'
         super(NationsLoader, self).__init__(dataset_name)
+
+
+class TACREDLoader(_ConvEDataLoader):
+    def __init__(self):
+        dataset_name = 'TACRED'
+        super(TACREDLoader, self).__init__(dataset_name)
 
 
 class UMLSLoader(_ConvEDataLoader):
